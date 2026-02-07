@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Chat online simples</title>
+</head>
+<body>
+
+<input id="nome" placeholder="seu nome">
+<br><br>
+
+<ul id="chat"></ul>
+
+<input id="msg" placeholder="digita aí, criatura">
+<button onclick="enviar()">Enviar</button>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+  import {
+    getFirestore, collection, addDoc, onSnapshot, query, orderBy
+  } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "SUA_API_KEY",
+    authDomain: "SEU_PROJETO.firebaseapp.com",
+    projectId: "SEU_PROJETO"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  const chat = document.getElementById("chat");
+
+  const q = query(collection(db, "mensagens"), orderBy("data"));
+
+  onSnapshot(q, (snapshot) => {
+    chat.innerHTML = "";
+    snapshot.forEach(doc => {
+      const li = document.createElement("li");
+      li.textContent = `${doc.data().nome}: ${doc.data().texto}`;
+      chat.appendChild(li);
+    });
+  });
+
+  window.enviar = async () => {
+    const nome = document.getElementById("nome").value;
+    const msg = document.getElementById("msg").value;
+
+    if (!nome || !msg) return;
+
+    await addDoc(collection(db, "mensagens"), {
+      nome,
+      texto: msg,
+      data: Date.now()
+    });
+
+    document.getElementById("msg").value = "";
+  };
+</script>
+
+</body>
+</html>
