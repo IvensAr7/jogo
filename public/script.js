@@ -10,16 +10,22 @@ function enviar() {
 
   if (!nome || !msg) return;
 
-  socket.emit("mensagem", {
-    nome,
-    texto: msg
-  });
-
+  socket.emit("mensagem", { nome, texto: msg });
   msgInput.value = "";
 }
 
 socket.on("mensagem", (dados) => {
+  adicionarMsg(dados);
+});
+
+// recebe histórico ao entrar
+socket.on("historico", (msgs) => {
+  chat.innerHTML = "";
+  msgs.forEach(adicionarMsg);
+});
+
+function adicionarMsg(dados) {
   const li = document.createElement("li");
   li.textContent = `${dados.nome}: ${dados.texto}`;
   chat.appendChild(li);
-});
+}
