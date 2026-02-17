@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Chat online simples</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
@@ -15,6 +16,9 @@
 
 <input id="msg" placeholder="digita aí, criatura">
 <button onclick="enviar()">Enviar</button>
+<br>
+<button onclick="limparChat()">Limpar Chat</button>
+
 
 <!-- socket.io vem do servidor -->
 <script src="/socket.io/socket.io.js"></script>
