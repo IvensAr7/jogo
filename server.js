@@ -107,6 +107,7 @@ io.on("connection", (socket) => {
     try {
       if (!payload || !payload.role) return;
 
+      /* ================= PLAYER ================= */
       if (payload.role === "player") {
         const nome = (payload.nome || "").trim();
         const avatar = payload.avatar || null;
@@ -117,11 +118,10 @@ io.on("connection", (socket) => {
           return;
         }
 
-        // busca usuário
         let usuario = await Usuario.findOne({ nome });
 
         if (!usuario) {
-          // cria novo usuário
+          // cria novo jogador
           const hash = await bcrypt.hash(senha, 10);
           usuario = await Usuario.create({
             nome,
@@ -130,19 +130,21 @@ io.on("connection", (socket) => {
             role: "player"
           });
         } else {
-          // valida senha
-          const ok = await bcrypt.compare(senha, usuario.senha);
-          if (!ok) {
+          // se já existe mas não é player → bloqueia
+          if (usuario.role !== "player") {
+            socket.emit("registerError", "Nome indisponível.");
+            return;
+          }
+
+          const senhaValida = await bcrypt.compare(senha, usuario.senha);
+          if (!senhaValida) {
             socket.emit("registerError", "Senha incorreta.");
             return;
           }
         }
 
-        // cria token de sessão
-        const token = makeToken();
-        userSessions[token] = usuario._id.toString();
-
         socket.usuario = usuario;
+
         onlineUsers[socket.id] = {
           socketId: socket.id,
           userId: usuario._id,
@@ -153,52 +155,45 @@ io.on("connection", (socket) => {
         };
 
         io.emit("onlineUsers", Object.values(onlineUsers));
-        socket.emit("registered", await getUserPublic(usuario));
-        socket.emit("authToken", token);
-        console.log("Player logado:", usuario.nome);
+        socket.emit("registered", {
+          nome: usuario.nome,
+          role: usuario.role,
+          avatar: usuario.avatar
+        });
+
         return;
       }
 
+      /* ================= MASTER ================= */
       if (payload.role === "master") {
         const senha = payload.senha || "";
+        const avatar = payload.avatar || null;
+
         if (!process.env.ADMIN_SECRET || senha !== process.env.ADMIN_SECRET) {
           socket.emit("registerError", "Senha do mestre incorreta.");
           return;
         }
 
-        const nomeDesejado = (payload.nome || "Mestre").trim();
-        const avatar = payload.avatar || null;
+        socket.usuario = {
+          _id: null,
+          nome: "Mestre",
+          role: "master",
+          avatar: avatar,
+          muted: false
+        };
 
-        // tenta encontrar usuário master com esse nome
-        let usuario = await Usuario.findOne({ nome: nomeDesejado, role: "master" });
-        if (!usuario) {
-          // cria registro de master (senha armazenada como hash do ADMIN_SECRET)
-          const hash = await bcrypt.hash(process.env.ADMIN_SECRET, 10);
-          usuario = await Usuario.create({
-            nome: nomeDesejado,
-            senha: hash,
-            avatar,
-            role: "master"
-          });
-        }
-
-        const token = makeToken();
-        userSessions[token] = usuario._id.toString();
-
-        socket.usuario = usuario;
         onlineUsers[socket.id] = {
           socketId: socket.id,
-          userId: usuario._id,
-          nome: usuario.nome,
-          role: usuario.role,
-          avatar: usuario.avatar,
-          muted: usuario.muted
+          userId: null,
+          nome: "Mestre",
+          role: "master",
+          avatar: avatar,
+          muted: false
         };
 
         io.emit("onlineUsers", Object.values(onlineUsers));
-        socket.emit("registered", await getUserPublic(usuario));
-        socket.emit("authToken", token);
-        console.log("Master autenticado:", usuario.nome);
+        socket.emit("registered", socket.usuario);
+
         return;
       }
 
@@ -229,9 +224,9 @@ io.on("connection", (socket) => {
       }
 
       const nova = new Mensagem({
-        nome: dados.nome,
+        nome: socket.usuario.nome,
         texto: dados.texto,
-        avatar: socket.usuario.avatar || dados.avatar || null,
+        avatar: socket.usuario.avatar || null,
         autorId: socket.usuario._id || null
       });
       await nova.save();
@@ -294,18 +289,30 @@ io.on("connection", (socket) => {
   });
 
   // troca de nome do master
-  socket.on("setMyName", async (novoNome) => {
-    try {
-      if (!socket.usuario || socket.usuario.role !== "master") return;
-      socket.usuario.nome = novoNome;
-      await Usuario.findByIdAndUpdate(socket.usuario._id, { nome: novoNome });
-      // atualizar onlineUsers
-      if (onlineUsers[socket.id]) onlineUsers[socket.id].nome = novoNome;
-      io.emit("onlineUsers", Object.values(onlineUsers));
-      socket.emit("registered", await getUserPublic(socket.usuario));
-    } catch (e) {
-      console.error("Erro setMyName:", e);
+  socket.on("setMyName", (novoNome) => {
+    if (!socket.usuario || socket.usuario.role !== "master") return;
+
+    socket.usuario.nome = novoNome;
+
+    if (onlineUsers[socket.id]) {
+      onlineUsers[socket.id].nome = novoNome;
     }
+
+    io.emit("onlineUsers", Object.values(onlineUsers));
+    socket.emit("registered", socket.usuario);
+  });
+
+  // trocar avatar do master
+  socket.on("setMyAvatar", (novoAvatar) => {
+    if (!socket.usuario || socket.usuario.role !== "master") return;
+
+    socket.usuario.avatar = novoAvatar;
+
+    if (onlineUsers[socket.id]) {
+      onlineUsers[socket.id].avatar = novoAvatar;
+    }
+
+    io.emit("onlineUsers", Object.values(onlineUsers));
   });
 
   // desconexão

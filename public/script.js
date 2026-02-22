@@ -34,6 +34,18 @@ let myName = null;
 let myRole = "player";
 let minhaAvatar = null;
 let serverState = { globalMuted: false };
+let selectedMasterAvatar = null;
+
+document.querySelectorAll("#master-avatar-options .avatar-option")
+.forEach(img => {
+  img.addEventListener("click", () => {
+    document.querySelectorAll("#master-avatar-options .avatar-option")
+      .forEach(i => i.classList.remove("selected"));
+
+    img.classList.add("selected");
+    selectedMasterAvatar = img.dataset.avatar;
+  });
+});
 
 // helpers
 function mostrarAviso(texto) {
