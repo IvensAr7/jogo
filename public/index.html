@@ -1,29 +1,58 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8">
-  <title>Chat online simples</title>
-  <link rel="stylesheet" href="style.css">
+<meta charset="utf-8" />
+<title>Chat — jogo</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Tela de escolha de perfil -->
+  <div id="screen-register">
+    <h2>Entrar</h2>
+    <label><input type="radio" name="role" value="player" checked> Jogador</label>
+    <label><input type="radio" name="role" value="master"> Mestre</label>
 
-<h2>Chat online</h2>
+    <div id="player-form">
+      <h3>Escolha avatar e nome</h3>
+      <div id="avatar-options">
+        <img src="avatars/avatar1.png" data-avatar="avatars/avatar1.png" class="avatar-option">
+        <img src="avatars/avatar2.png" data-avatar="avatars/avatar2.png" class="avatar-option">
+        <img src="avatars/avatar3.png" data-avatar="avatars/avatar3.png" class="avatar-option">
+        <!-- adicione mais -->
+      </div>
+      <input id="player-name" placeholder="Seu nome">
+      <button id="enter-player">Entrar como Jogador</button>
+    </div>
 
-<input id="nome" placeholder="seu nome, carai">
-<br><br>
+    <div id="master-form" style="display:none">
+      <h3>Mestre</h3>
+      <input id="master-name" placeholder="Nome que será exibido (opcional)">
+      <input id="master-pass" placeholder="Senha do mestre" type="password">
+      <button id="enter-master">Entrar como Mestre</button>
+    </div>
+  </div>
 
-<ul id="chat"></ul>
+  <!-- Tela de chat -->
+  <div id="screen-chat" style="display:none">
+    <div id="admin-panel" style="display:none">
+      <button id="btn-clear">Limpar tudo</button>
+      <button id="btn-global-mute">Silenciar todos</button>
+      <button id="btn-master-only">Modo apenas mestre</button>
+      <input id="mute-target" placeholder="Nome pra silenciar">
+      <button id="btn-mute">Silenciar</button>
+      <button id="btn-unmute">Dessilenciar</button>
+      <input id="set-name-input" placeholder="Trocar meu nome">
+      <button id="btn-set-name">Trocar nome</button>
+    </div>
 
-<input id="msg" placeholder="digita aí, criatura">
-<button onclick="enviar()">Enviar</button>
-<br>
-<button onclick="limparChat()">Limpar Chat</button>
+    <h2>Chat</h2>
+    <ul id="chat"></ul>
 
+    <input id="msg" placeholder="Mensagem...">
+    <button id="send">Enviar</button>
+  </div>
 
-<!-- socket.io vem do servidor -->
-<script src="/socket.io/socket.io.js"></script>
-<script src="script.js"></script>
-
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="script.js"></script>
 </body>
 </html>
-
