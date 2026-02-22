@@ -3,21 +3,21 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const mongoose = require("mongoose");
+const bcrypt = require("bcrypt");
+const crypto = require("crypto");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { /* opcional: cors config */ });
-
-let onlineUsers = {};
+const io = new Server(server);
 
 app.use(express.static("public"));
 
-/* ====== conexao mongo ====== */
+// Conexão Mongo
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("Mongo conectado"))
   .catch(err => console.error("Erro Mongo:", err));
 
-/* ====== models ====== */
+// Schemas / Models
 const mensagemSchema = new mongoose.Schema({
   nome: String,
   texto: String,
@@ -28,35 +28,81 @@ const mensagemSchema = new mongoose.Schema({
 const Mensagem = mongoose.model("Mensagem", mensagemSchema);
 
 const userSchema = new mongoose.Schema({
-  nome: { type: String, unique: false },
+  nome: { type: String, unique: true },
+  senha: { type: String, required: true },
   role: { type: String, default: "player" }, // player ou master
   avatar: String,
   muted: { type: Boolean, default: false }
 });
 const Usuario = mongoose.model("Usuario", userSchema);
 
-/* ====== estado servidor ====== */
-let globalMuted = false;     // silenciar todos
-let masterOnly = false;      // somente mestre pode mandar
+// Estado
+let onlineUsers = {};      // socketId -> { socketId, userId, nome, role, avatar, muted }
+let userSessions = {};     // token -> userId
+let globalMuted = false;
 
-/* ====== socket ====== */
+// Helpers
+function makeToken() {
+  return crypto.randomBytes(24).toString("hex");
+}
+
+async function getUserPublic(user) {
+  return {
+    _id: user._id,
+    nome: user.nome,
+    role: user.role,
+    avatar: user.avatar,
+    muted: !!user.muted
+  };
+}
+
+// Socket
 io.on("connection", (socket) => {
   console.log("Conectou:", socket.id);
 
-  // envia histórico ao conectar (limit pra não puxar muito)
+  // envia histórico e estado ao conectar
   (async () => {
     try {
       const historico = await Mensagem.find().sort({ data: 1 }).limit(500);
       socket.emit("historico", historico);
-      socket.emit("serverState", { globalMuted, masterOnly }); // atualiza estado do cliente
+      socket.emit("serverState", { globalMuted });
+      // se cliente enviar resume, tratamos lá
     } catch (e) {
       console.error("Erro ao buscar histórico:", e);
     }
   })();
 
-  // registro (player ou master)
-  // payload para player: { role: "player", nome, avatar }
-  // payload para master: { role: "master", senha, nomeDesejado }
+  // tentar restaurar sessão via token
+  socket.on("resume", async (token) => {
+    try {
+      if (!token) return;
+      const userId = userSessions[token];
+      if (!userId) return;
+      const usuario = await Usuario.findById(userId);
+      if (!usuario) return;
+
+      socket.usuario = usuario;
+      onlineUsers[socket.id] = {
+        socketId: socket.id,
+        userId: usuario._id,
+        nome: usuario.nome,
+        role: usuario.role,
+        avatar: usuario.avatar,
+        muted: usuario.muted
+      };
+
+      socket.emit("registered", await getUserPublic(usuario));
+      socket.emit("authToken", token); // reenvia token (opcional)
+      io.emit("onlineUsers", Object.values(onlineUsers));
+      console.log("Sessão restaurada:", usuario.nome);
+    } catch (e) {
+      console.error("Erro resume:", e);
+    }
+  });
+
+  // registro / login
+  // payload { role, nome, avatar, senha } for player
+  // payload { role: 'master', nome, senha } for master (senha deve ser ADMIN_SECRET)
   socket.on("register", async (payload) => {
     try {
       if (!payload || !payload.role) return;
@@ -64,44 +110,95 @@ io.on("connection", (socket) => {
       if (payload.role === "player") {
         const nome = (payload.nome || "").trim();
         const avatar = payload.avatar || null;
-        if (!nome || !avatar) {
-          socket.emit("registerError", "Nome e avatar são obrigatórios.");
+        const senha = payload.senha || "";
+
+        if (!nome || !avatar || !senha) {
+          socket.emit("registerError", "Nome, avatar e senha são obrigatórios.");
           return;
         }
 
-        // cria usuário (não precisa ser único globalmente)
-        const usuario = await Usuario.create({ nome, avatar, role: "player" });
+        // busca usuário
+        let usuario = await Usuario.findOne({ nome });
+
+        if (!usuario) {
+          // cria novo usuário
+          const hash = await bcrypt.hash(senha, 10);
+          usuario = await Usuario.create({
+            nome,
+            senha: hash,
+            avatar,
+            role: "player"
+          });
+        } else {
+          // valida senha
+          const ok = await bcrypt.compare(senha, usuario.senha);
+          if (!ok) {
+            socket.emit("registerError", "Senha incorreta.");
+            return;
+          }
+        }
+
+        // cria token de sessão
+        const token = makeToken();
+        userSessions[token] = usuario._id.toString();
+
         socket.usuario = usuario;
         onlineUsers[socket.id] = {
           socketId: socket.id,
           userId: usuario._id,
           nome: usuario.nome,
-          role: usuario.role
+          role: usuario.role,
+          avatar: usuario.avatar,
+          muted: usuario.muted
         };
 
         io.emit("onlineUsers", Object.values(onlineUsers));
-        socket.emit("registered", { nome: usuario.nome, role: usuario.role, avatar: usuario.avatar });
-        console.log(`Player registrado: ${usuario.nome}`);
+        socket.emit("registered", await getUserPublic(usuario));
+        socket.emit("authToken", token);
+        console.log("Player logado:", usuario.nome);
         return;
       }
 
       if (payload.role === "master") {
         const senha = payload.senha || "";
-        // checa variável de ambiente ADMIN_SECRET
         if (!process.env.ADMIN_SECRET || senha !== process.env.ADMIN_SECRET) {
           socket.emit("registerError", "Senha do mestre incorreta.");
           return;
         }
-        // mestre autenticado: permite escolher nome livremente e avatar opcional
+
         const nomeDesejado = (payload.nome || "Mestre").trim();
         const avatar = payload.avatar || null;
 
-        // criar/atualizar documento do mestre para gerenciar lista de users (opcional)
-        // aqui criamos um documento com role master para que existam registros persistentes
-        let usuario = await Usuario.create({ nome: nomeDesejado, avatar, role: "master" });
+        // tenta encontrar usuário master com esse nome
+        let usuario = await Usuario.findOne({ nome: nomeDesejado, role: "master" });
+        if (!usuario) {
+          // cria registro de master (senha armazenada como hash do ADMIN_SECRET)
+          const hash = await bcrypt.hash(process.env.ADMIN_SECRET, 10);
+          usuario = await Usuario.create({
+            nome: nomeDesejado,
+            senha: hash,
+            avatar,
+            role: "master"
+          });
+        }
+
+        const token = makeToken();
+        userSessions[token] = usuario._id.toString();
+
         socket.usuario = usuario;
-        socket.emit("registered", { nome: usuario.nome, role: usuario.role, avatar: usuario.avatar });
-        console.log(`Mestre autenticado: ${usuario.nome}`);
+        onlineUsers[socket.id] = {
+          socketId: socket.id,
+          userId: usuario._id,
+          nome: usuario.nome,
+          role: usuario.role,
+          avatar: usuario.avatar,
+          muted: usuario.muted
+        };
+
+        io.emit("onlineUsers", Object.values(onlineUsers));
+        socket.emit("registered", await getUserPublic(usuario));
+        socket.emit("authToken", token);
+        console.log("Master autenticado:", usuario.nome);
         return;
       }
 
@@ -111,24 +208,26 @@ io.on("connection", (socket) => {
     }
   });
 
-  // nova mensagem (verifica mutes e modo mestre-only)
+  // nova mensagem
   socket.on("mensagem", async (dados) => {
     try {
       if (!dados || !dados.nome || !dados.texto) return;
-
-      // se não estiver registrado, ignora
       if (!socket.usuario) return;
 
-      // se é master, sempre pode (se for criado como master)
       const isMaster = socket.usuario.role === "master";
 
-      // checagens de permissão:
-      if (masterOnly && !isMaster) return;           // só mestre manda
-      if (globalMuted && !isMaster) return;          // global mute
-      const usuarioAtual = await Usuario.findById(socket.usuario._id);
-      if (usuarioAtual.muted && !isMaster) return;
+      if (globalMuted && !isMaster) {
+        socket.emit("mutedWarning", "O chat está silenciado pelo mestre.");
+        return;
+      }
 
-      // salva mensagem
+      // verifica status atualizado no DB (para muted)
+      const usuarioAtual = await Usuario.findById(socket.usuario._id);
+      if (usuarioAtual && usuarioAtual.muted && !isMaster) {
+        socket.emit("mutedWarning", "Você está silenciado pelo mestre.");
+        return;
+      }
+
       const nova = new Mensagem({
         nome: dados.nome,
         texto: dados.texto,
@@ -143,33 +242,29 @@ io.on("connection", (socket) => {
     }
   });
 
-  /* ====== AÇÕES DO MESTRE (apenas se socket.usuario.role === "master") ====== */
-
-  // apagar uma mensagem por id
+  // apagar mensagem (master)
   socket.on("deleteMessage", async (id) => {
     try {
       if (!socket.usuario || socket.usuario.role !== "master") return;
       await Mensagem.findByIdAndDelete(id);
       io.emit("messageDeleted", id);
-      console.log("Mensagem apagada por master:", id);
     } catch (e) {
       console.error("Erro deleteMessage:", e);
     }
   });
 
-  // apagar todas as mensagens
+  // limpar tudo (master)
   socket.on("clearAll", async () => {
     try {
       if (!socket.usuario || socket.usuario.role !== "master") return;
       await Mensagem.deleteMany({});
       io.emit("cleared");
-      console.log("Chat limpo pelo master");
     } catch (e) {
       console.error("Erro clearAll:", e);
     }
   });
 
-  // silenciar / dessilenciar usuário (por nome ou id)
+  // silenciar / dessilenciar por userId (master)
   socket.on("muteUser", async ({ userId, mute }) => {
     try {
       if (!socket.usuario || socket.usuario.role !== "master") return;
@@ -177,55 +272,49 @@ io.on("connection", (socket) => {
 
       await Usuario.findByIdAndUpdate(userId, { muted: !!mute });
 
-      // atualizar também usuário online se estiver conectado
-      for (let id in onlineUsers) {
-        if (onlineUsers[id].userId.toString() === userId) {
-          io.to(id).emit("userMuted", { mute: !!mute });
+      // atualizar onlineUsers e notificar o socket do user
+      for (let sid in onlineUsers) {
+        if (onlineUsers[sid].userId.toString() === userId) {
+          onlineUsers[sid].muted = !!mute;
+          io.to(sid).emit("userMuted", { mute: !!mute });
         }
       }
 
-      console.log(`Master alterou mute para ${userId}: ${mute}`);
+      io.emit("onlineUsers", Object.values(onlineUsers));
     } catch (e) {
       console.error("Erro muteUser:", e);
     }
   });
 
-  // silenciar todos / master-only toggle
+  // global mute toggle (master)
   socket.on("setGlobalMute", ({ value }) => {
     if (!socket.usuario || socket.usuario.role !== "master") return;
     globalMuted = !!value;
-    io.emit("serverState", { globalMuted, masterOnly });
-    console.log("globalMuted set to", globalMuted);
+    io.emit("serverState", { globalMuted });
   });
 
-  socket.on("setMasterOnly", ({ value }) => {
-    if (!socket.usuario || socket.usuario.role !== "master") return;
-    masterOnly = !!value;
-    io.emit("serverState", { globalMuted, masterOnly });
-    console.log("masterOnly set to", masterOnly);
-  });
-
-  // master pode renomear-se livremente
+  // troca de nome do master
   socket.on("setMyName", async (novoNome) => {
     try {
       if (!socket.usuario || socket.usuario.role !== "master") return;
       socket.usuario.nome = novoNome;
       await Usuario.findByIdAndUpdate(socket.usuario._id, { nome: novoNome });
-      socket.emit("registered", { nome: novoNome, role: "master", avatar: socket.usuario.avatar });
-      console.log("Master trocou nome para", novoNome);
+      // atualizar onlineUsers
+      if (onlineUsers[socket.id]) onlineUsers[socket.id].nome = novoNome;
+      io.emit("onlineUsers", Object.values(onlineUsers));
+      socket.emit("registered", await getUserPublic(socket.usuario));
     } catch (e) {
       console.error("Erro setMyName:", e);
     }
   });
 
-  // ao desconectar
+  // desconexão
   socket.on("disconnect", () => {
-    // limpeza opcional
     delete onlineUsers[socket.id];
     io.emit("onlineUsers", Object.values(onlineUsers));
   });
 });
 
-/* ====== server start ====== */
+// start
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log("Server rodando na porta", PORT));
