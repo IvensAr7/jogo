@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="pt-BR">
-<head>
-<meta charset="utf-8" />
-<title>Chat — jogo</title>
-<link rel="stylesheet" href="style.css">
-</head>
+  <head>
+    <meta charset="utf-8" />
+    <title>Chat — jogo</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
 <body>
   <!-- Tela de escolha de perfil -->
   <div id="screen-register">
@@ -45,9 +45,16 @@
       <button id="btn-clear">Limpar tudo</button>
       <button id="btn-global-mute">Silenciar todos</button>
       <button id="btn-master-only">Modo apenas mestre</button>
-      <input id="mute-target" placeholder="Nome pra silenciar">
+
+      <hr>
+
+      <label>Silenciar jogador:</label>
+      <select id="mute-target"></select>
       <button id="btn-mute">Silenciar</button>
       <button id="btn-unmute">Dessilenciar</button>
+
+      <hr>
+
       <input id="set-name-input" placeholder="Trocar meu nome">
       <button id="btn-set-name">Trocar nome</button>
     </div>

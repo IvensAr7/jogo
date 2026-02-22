@@ -8,6 +8,8 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { /* opcional: cors config */ });
 
+let onlineUsers = {};
+
 app.use(express.static("public"));
 
 /* ====== conexao mongo ====== */
@@ -70,6 +72,14 @@ io.on("connection", (socket) => {
         // cria usuário (não precisa ser único globalmente)
         const usuario = await Usuario.create({ nome, avatar, role: "player" });
         socket.usuario = usuario;
+        onlineUsers[socket.id] = {
+          socketId: socket.id,
+          userId: usuario._id,
+          nome: usuario.nome,
+          role: usuario.role
+        };
+
+        io.emit("onlineUsers", Object.values(onlineUsers));
         socket.emit("registered", { nome: usuario.nome, role: usuario.role, avatar: usuario.avatar });
         console.log(`Player registrado: ${usuario.nome}`);
         return;
@@ -115,7 +125,8 @@ io.on("connection", (socket) => {
       // checagens de permissão:
       if (masterOnly && !isMaster) return;           // só mestre manda
       if (globalMuted && !isMaster) return;          // global mute
-      if (socket.usuario.muted && !isMaster) return; // usuário silenciado
+      const usuarioAtual = await Usuario.findById(socket.usuario._id);
+      if (usuarioAtual.muted && !isMaster) return;
 
       // salva mensagem
       const nova = new Mensagem({
@@ -159,14 +170,21 @@ io.on("connection", (socket) => {
   });
 
   // silenciar / dessilenciar usuário (por nome ou id)
-  socket.on("muteUser", async ({ targetNome, mute }) => {
+  socket.on("muteUser", async ({ userId, mute }) => {
     try {
       if (!socket.usuario || socket.usuario.role !== "master") return;
-      if (!targetNome) return;
+      if (!userId) return;
 
-      await Usuario.updateMany({ nome: targetNome }, { $set: { muted: !!mute } });
-      io.emit("userMuted", { targetNome, mute: !!mute });
-      console.log(`Master ${socket.usuario.nome} set mute=${!!mute} para ${targetNome}`);
+      await Usuario.findByIdAndUpdate(userId, { muted: !!mute });
+
+      // atualizar também usuário online se estiver conectado
+      for (let id in onlineUsers) {
+        if (onlineUsers[id].userId.toString() === userId) {
+          io.to(id).emit("userMuted", { mute: !!mute });
+        }
+      }
+
+      console.log(`Master alterou mute para ${userId}: ${mute}`);
     } catch (e) {
       console.error("Erro muteUser:", e);
     }
@@ -203,6 +221,8 @@ io.on("connection", (socket) => {
   // ao desconectar
   socket.on("disconnect", () => {
     // limpeza opcional
+    delete onlineUsers[socket.id];
+    io.emit("onlineUsers", Object.values(onlineUsers));
   });
 });
 

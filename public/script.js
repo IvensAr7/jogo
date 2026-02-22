@@ -67,6 +67,40 @@ enterMasterBtn.addEventListener("click", () => {
   socket.emit("register", { role: "master", senha, nome: nomeDesejado });
 });
 
+// online users
+let onlineUsers = {};
+
+socket.on("register", (dados) => {
+  socket.user = dados;
+
+  onlineUsers[socket.id] = {
+    nome: dados.nome,
+    role: dados.role
+  };
+
+  io.emit("onlineUsers", Object.values(onlineUsers));
+});
+
+socket.on("disconnect", () => {
+  delete onlineUsers[socket.id];
+  io.emit("onlineUsers", Object.values(onlineUsers));
+});
+
+socket.on("onlineUsers", (users) => {
+  muteTarget.innerHTML = "";
+
+  users.forEach(u => {
+    if (u.role !== "master") {
+      const opt = document.createElement("option");
+      opt.value = u.nome;
+      opt.textContent = u.nome;
+      muteTarget.appendChild(opt);
+    }
+  });
+});
+
+
+
 // recebendo confirmação de registro
 socket.on("registered", (dados) => {
   myName = dados.nome;
@@ -178,13 +212,13 @@ btnMasterOnly.addEventListener("click", () => {
 });
 
 btnMute.addEventListener("click", () => {
-  const target = muteTarget.value.trim();
+  const target = muteTarget.value;
   if (!target) return;
   socket.emit("muteUser", { targetNome: target, mute: true });
 });
 
 btnUnmute.addEventListener("click", () => {
-  const target = muteTarget.value.trim();
+  const target = muteTarget.value;
   if (!target) return;
   socket.emit("muteUser", { targetNome: target, mute: false });
 });
